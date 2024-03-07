@@ -42,10 +42,35 @@ fn glob(globs: Globs, dir: &str, recursion: bool) -> Result<Vec<String>, Box<dyn
     Ok(paths)
 }
 
-fn find(text: impl Read, pattern: &str) -> Result<Vec<(usize, String)>, Box<dyn Error>> {
-    let re = Regex::new(pattern)?;
-    let mut result = Vec::new();
+struct PatternStr(String);
 
+impl Matcher for PatternStr {
+    fn is_match(&self, haystack: &str) -> bool {
+        haystack.contains(&self.0)
+    }
+}
+
+impl Matcher for Regex {
+    fn is_match(&self, haystack: &str) -> bool {
+        self.is_match(haystack)
+    }
+}
+
+trait Matcher {
+    fn is_match(&self, haystack: &str) -> bool;
+}
+
+fn find(
+    text: impl Read,
+    pattern: &str,
+    regex: bool,
+) -> Result<Vec<(usize, String)>, Box<dyn Error>> {
+    let re: Box<dyn Matcher> = if regex {
+        Box::new(Regex::new(pattern)?)
+    } else {
+        Box::new(PatternStr(pattern.to_string()))
+    };
+    let mut result = Vec::new();
     for (index, r) in BufReader::new(text).lines().enumerate() {
         let text = r?;
         if re.is_match(&text) {
@@ -64,6 +89,12 @@ mod tests {
         let textcases: Vec<(Globs, &str, usize, bool)> = vec![
             (Globs::Globs(vec!["**/main.rs".to_string()]), ".", 1, false),
             (Globs::Globs(vec!["./Cargo.*".to_string()]), ".", 2, false),
+            (
+                Globs::Globs(vec!["./Cargo.*".to_string()]),
+                "notfound",
+                1,
+                true,
+            ),
         ];
         for (globs, path, len, want_err) in textcases {
             let result = glob(globs, path, true);
@@ -72,8 +103,8 @@ mod tests {
                     assert_eq!(v.len(), len);
                     assert!(!want_err);
                 }
-                Err(_) => {
-                    assert!(want_err);
+                Err(err) => {
+                    assert!(want_err, "{err}");
                 }
             }
         }
@@ -81,17 +112,21 @@ mod tests {
 
     #[test]
     fn test_find() {
-        let textcases: Vec<(&str, &str, usize, bool)> =
-            vec![("hello", "hello", 1, false), ("hello", "x", 0, false)];
-        for (text, pattern, len, want_err) in textcases {
-            let result = find(Cursor::new(text), pattern);
+        let textcases: Vec<(&str, &str, bool, usize, bool)> = vec![
+            ("hello", "hello", true, 1, false),
+            ("hello", "x", true, 0, false),
+            ("hello", "hel((lo", true, 0, true),
+            ("hello", "hel((lo", false, 0, false),
+        ];
+        for (text, pattern, regex, len, want_err) in textcases {
+            let result = find(Cursor::new(text), pattern, regex);
             match result {
                 Ok(v) => {
                     assert_eq!(v.len(), len);
                     assert!(!want_err);
                 }
-                Err(_) => {
-                    assert!(want_err);
+                Err(err) => {
+                    assert!(want_err, "{err}");
                 }
             }
         }
